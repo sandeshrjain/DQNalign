@@ -1,7 +1,7 @@
 """ Initialize the parameters of the DQN algorithm """
 batch_size = 32 #How many experiences to use for each training step.
 update_freq = 4 #How often to perform a training step.
-test_freq = 1 #How often to perform a test network.
+test_freq = 3 #How often to perform a test network.
 save_freq = 20 #How often to perform a save network.
 y = .99 #Discount factor on the target Q-values
 startE = 1 #Starting chance of random action

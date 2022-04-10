@@ -7,6 +7,10 @@ from DQNalign.tool.RL.Learning import *
 import DQNalign.tool.util.function as function
 import time
 
+#from tool.RL.Learning import per_experience_buffer
+
+USE_PER = True
+PER_BATCH_SIZE = 32
 class Agent():
     def __init__(self, FLAGS, istrain, game_env, model, seq1 = [], seq2 = [], ismeta = False):
         """ Get parameters from files """
@@ -47,7 +51,10 @@ class Agent():
         """ Initialize the variables """
         self.total_steps = 0
         self.start = time.time()
-        self.myBuffer = experience_buffer()
+        if USE_PER:
+            self.myBuffer = per_experience_buffer()
+        else:
+            self.myBuffer = experience_buffer()
 
     def reset(self):
         """ Define sequence alignment environment """
@@ -61,7 +68,11 @@ class Agent():
         self.env.test(seq1,seq2)
 
     def train(self, sess):
-        trainBatch = self.myBuffer.sample(self.param.batch_size)  # Select the batch from the experience buffer
+        if USE_PER:
+            tree_idx, trainBatch = self.myBuffer.sample(PER_BATCH_SIZE)
+            trainBatch = np.array(trainBatch)
+        else:
+            trainBatch = self.myBuffer.sample(self.param.batch_size)  # Select the batch from the experience buffer
         #print(np.shape(np.vstack(trainBatch[:, 3])))
         
         if (self.FLAGS.model_name == "DQN") or (self.FLAGS.model_name == "SSD") or (self.FLAGS.model_name == "DiffSSD") or (self.FLAGS.model_name == "FFTDQN"):
@@ -78,6 +89,14 @@ class Agent():
             targetQ = trainBatch[:, 2] + (self.param.y * doubleQ * end_multiplier)
             _, loss = sess.run([self.mainQN.updateModel, self.mainQN.loss], feed_dict={self.mainQN.scalarInput: np.vstack(trainBatch[:, 0]), self.mainQN.targetQ: targetQ, self.mainQN.actions: trainBatch[:, 1]})
             updateTarget(self.targetOps, sess)  # Update target network with 'tau' ratio
+
+            if USE_PER:
+                indices = np.arange(PER_BATCH_SIZE, dtype=np.int32)
+                Q1 = sess.run(self.mainQN.Qout, feed_dict={self.mainQN.scalarInput: np.vstack(trainBatch[:, 0])})
+                Q2 = sess.run(self.targetQN.Qout, feed_dict={self.targetQN.scalarInput: np.vstack(trainBatch[:, 3])})
+                actions = trainBatch[:, 1].astype(np.int32)
+                absolute_errors = np.abs(Q1[indices, actions] - targetQ)
+                self.myBuffer.batch_update(tree_idx, absolute_errors)
 
     def skip(self):
         a = []
@@ -353,7 +372,10 @@ class Agent():
         if self.FLAGS.print_align:
             Nucleotide = ["N","A","C","G","T"]
         if self.istrain:
-            episodeBuffer = experience_buffer()
+            if USE_PER:
+                episodeBuffer = []
+            else:
+                episodeBuffer = experience_buffer()
             # Environment reset for each episode
             s1 = self.env.reset() # Rendered image of the alignment environment
             s1 = processState(s1) # Resize to 1-dimensional vector
@@ -414,7 +436,10 @@ class Agent():
                 self.total_steps += 1
                 rT1 += r
                 rT2 += (r>0)
-                episodeBuffer.add(np.reshape(np.array([s, a[0], r, s1, d]), [1, 5]))  # Save the result into episode buffer
+                if USE_PER:
+                    episodeBuffer.append(np.reshape(np.array([s, a[0], r, s1, d]), [1, 5]))
+                else:
+                    episodeBuffer.add(np.reshape(np.array([s, a[0], r, s1, d]), [1, 5]))  # Save the result into episode buffer
 
                 if self.total_steps > self.param.pre_train_steps:
                     # Refresh exploration probability (epsilon-greedy)
@@ -449,7 +474,11 @@ class Agent():
     
         # Add the results of the episode into the total results
         if self.istrain:
-            self.myBuffer.add(episodeBuffer.buffer)
+            if USE_PER:
+                for experience in episodeBuffer:
+                    self.myBuffer.add(experience)
+            else:
+                self.myBuffer.add(episodeBuffer.buffer)
 
         now = time.time()
         if self.FLAGS.show_align and self.FLAGS.print_align:
